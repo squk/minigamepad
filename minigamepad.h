@@ -2273,9 +2273,9 @@ void mg_osx_device_added_callback(void* context, IOReturn result, void *sender, 
     }
     else {
         MG_SPRINTF(gamepad->guid, "05000000%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x00",
-                gamepad->name[0],  gamepad->name[1],  gamepad->name[2],  gamepad->name[3],
-                gamepad->name[4], gamepad->name[5],  gamepad->name[6],  gamepad->name[7],
-                gamepad->name[8], gamepad->name[9],  gamepad->name[10]);
+                (u8)gamepad->name[0],  (u8)gamepad->name[1],  (u8)gamepad->name[2],  (u8)gamepad->name[3],
+                (u8)gamepad->name[4], (u8)gamepad->name[5],  (u8)gamepad->name[6],  (u8)gamepad->name[7],
+                (u8)gamepad->name[8], (u8)gamepad->name[9],  (u8)gamepad->name[10]);
     }
 
 
@@ -2688,8 +2688,10 @@ mg_mapping* mg_gamepad_find_valid_mapping(mg_gamepad* js) {
     mg_mapping* mapping = findMapping(js->guid);
     if (mapping == NULL) {
         mapping = findMappingPermisive(js->guid);
-        if (mapping == NULL)
+        if (mapping == NULL) {
+            MG_FPRINTF(stderr, "minigamepad: mapping not found for gamepad '%s' (GUID: %s)\n", js->name, js->guid);
             return NULL;
+        }
     }
 
     return mapping;
