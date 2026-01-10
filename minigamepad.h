@@ -2265,6 +2265,8 @@ void mg_osx_device_added_callback(void* context, IOReturn result, void *sender, 
     if (property)
         CFNumberGetValue((CFNumberRef)property, (CFNumberType)kCFNumberSInt32Type, (void*)&version);
 
+    MG_FPRINTF(stderr, "DEBUG: mg_osx_device_added_callback - Vendor: 0x%04x, Product: 0x%04x, Version: 0x%04x, Name: '%s'\n", vendor, product, version, gamepad->name);
+
     if (vendor && product) {
         MG_SPRINTF(gamepad->guid, "03000000%02x%02x0000%02x%02x0000%02x%02x0000",
                 (u8) vendor, (u8) (vendor >> 8),
