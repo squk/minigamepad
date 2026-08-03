@@ -2600,7 +2600,7 @@ typedef struct mg_element {
 typedef struct mg_mapping {
     char            name[128];
     char            guid[33];
-    mg_element buttons[16];
+    mg_element buttons[MG_BUTTON_COUNT];
     mg_element axes[6];
 
     mg_button rButtons[256];
@@ -2699,10 +2699,24 @@ mg_mapping* mg_gamepad_find_valid_mapping(mg_gamepad* js) {
 typedef struct mg_field {
     const char* name;
     mg_size_t len;
+    u8 target;
     u8 val;
-    mg_element* element;
+    u8 axisVal;
 } mg_field;
-#define MG_FIELD(name, value) { name, sizeof(name), value, NULL }
+
+#define MG_MAPPING_FIELD_PLATFORM 0
+#define MG_MAPPING_FIELD_BUTTON   1
+#define MG_MAPPING_FIELD_AXIS     2
+#define MG_MAPPING_FIELD_TRIGGER  3
+
+#define MG_PLATFORM_FIELD(name) \
+    { name, sizeof(name) - 1, MG_MAPPING_FIELD_PLATFORM, 0, 0 }
+#define MG_BUTTON_FIELD(name, value) \
+    { name, sizeof(name) - 1, MG_MAPPING_FIELD_BUTTON, value, 0 }
+#define MG_AXIS_FIELD(name, value) \
+    { name, sizeof(name) - 1, MG_MAPPING_FIELD_AXIS, value, 0 }
+#define MG_TRIGGER_FIELD(name, button, axis) \
+    { name, sizeof(name) - 1, MG_MAPPING_FIELD_TRIGGER, button, axis }
 
 MG_API mg_bool parseMapping(mg_mapping* mapping, const char* string);
 mg_bool parseMapping(mg_mapping* mapping, const char* string) {
@@ -2710,45 +2724,33 @@ mg_bool parseMapping(mg_mapping* mapping, const char* string) {
     mg_size_t i, length; 
 
     mg_field fields[] = {
-        MG_FIELD("platform", 0),
-        MG_FIELD("a", MG_BUTTON_SOUTH),
-        MG_FIELD("b", MG_BUTTON_EAST),
-        MG_FIELD("x", MG_BUTTON_WEST),
-        MG_FIELD("y", MG_BUTTON_NORTH),
-        MG_FIELD("back", MG_BUTTON_BACK),
-        MG_FIELD("start", MG_BUTTON_START),
-        MG_FIELD("guide", MG_BUTTON_GUIDE),
-        MG_FIELD("leftshoulder", MG_BUTTON_LEFT_SHOULDER),
-        MG_FIELD("rightshoulder", MG_BUTTON_RIGHT_SHOULDER),
-        MG_FIELD("leftstick", MG_BUTTON_LEFT_STICK),
-        MG_FIELD("rightstick", MG_BUTTON_RIGHT_STICK),
-        MG_FIELD("dpup", MG_BUTTON_DPAD_UP),
-        MG_FIELD("dpright", MG_BUTTON_DPAD_RIGHT),
-        MG_FIELD("dpdown", MG_BUTTON_DPAD_DOWN),
-        MG_FIELD("dpleft", MG_BUTTON_DPAD_LEFT),
-        MG_FIELD("lefttrigger", MG_BUTTON_LEFT_TRIGGER),
-        MG_FIELD("righttrigger", MG_BUTTON_RIGHT_TRIGGER),
-
-        MG_FIELD("lefttrigger", MG_AXIS_LEFT_TRIGGER),
-        MG_FIELD("righttrigger", MG_AXIS_RIGHT_TRIGGER),
-        MG_FIELD("leftx",  MG_AXIS_LEFT_X),
-        MG_FIELD("lefty",  MG_AXIS_LEFT_Y),
-        MG_FIELD("rightx", MG_AXIS_RIGHT_X),
-        MG_FIELD("righty", MG_AXIS_RIGHT_Y)
+        MG_PLATFORM_FIELD("platform"),
+        MG_BUTTON_FIELD("a", MG_BUTTON_SOUTH),
+        MG_BUTTON_FIELD("b", MG_BUTTON_EAST),
+        MG_BUTTON_FIELD("x", MG_BUTTON_WEST),
+        MG_BUTTON_FIELD("y", MG_BUTTON_NORTH),
+        MG_BUTTON_FIELD("back", MG_BUTTON_BACK),
+        MG_BUTTON_FIELD("start", MG_BUTTON_START),
+        MG_BUTTON_FIELD("guide", MG_BUTTON_GUIDE),
+        MG_BUTTON_FIELD("leftshoulder", MG_BUTTON_LEFT_SHOULDER),
+        MG_BUTTON_FIELD("rightshoulder", MG_BUTTON_RIGHT_SHOULDER),
+        MG_BUTTON_FIELD("leftstick", MG_BUTTON_LEFT_STICK),
+        MG_BUTTON_FIELD("rightstick", MG_BUTTON_RIGHT_STICK),
+        MG_BUTTON_FIELD("dpup", MG_BUTTON_DPAD_UP),
+        MG_BUTTON_FIELD("dpright", MG_BUTTON_DPAD_RIGHT),
+        MG_BUTTON_FIELD("dpdown", MG_BUTTON_DPAD_DOWN),
+        MG_BUTTON_FIELD("dpleft", MG_BUTTON_DPAD_LEFT),
+        MG_TRIGGER_FIELD("lefttrigger", MG_BUTTON_LEFT_TRIGGER, MG_AXIS_LEFT_TRIGGER),
+        MG_TRIGGER_FIELD("righttrigger", MG_BUTTON_RIGHT_TRIGGER, MG_AXIS_RIGHT_TRIGGER),
+        MG_AXIS_FIELD("leftx", MG_AXIS_LEFT_X),
+        MG_AXIS_FIELD("lefty", MG_AXIS_LEFT_Y),
+        MG_AXIS_FIELD("rightx", MG_AXIS_RIGHT_X),
+        MG_AXIS_FIELD("righty", MG_AXIS_RIGHT_Y)
     };
 
-    size_t fields_len = (sizeof(fields) / sizeof(mg_field));
-    
-    size_t axes_len = 6; 
-    size_t buttons_len = fields_len - axes_len;
+    const mg_size_t fields_len = sizeof(fields) / sizeof(fields[0]);
 
-    for (i = 0; i < buttons_len; i++) {
-        fields[i].element = &mapping->buttons[fields[i].val];
-    }
-
-    for (i = buttons_len; i < fields_len; i++) {
-        fields[i].element = &mapping->axes[fields[i].val];
-    }
+    MG_MEMSET(mapping, 0, sizeof(*mapping));
 
     length = MG_STRCSPN(substr, ",");
     if (length != 32 || substr[length] != ',') {
@@ -2778,6 +2780,8 @@ mg_bool parseMapping(mg_mapping* mapping, const char* string) {
             int8_t minimum = -1;
             int8_t maximum = 1;
             mg_element* e;
+            const char* value;
+            const char* source;
 
             switch (mod) {
                 case '+':
@@ -2792,9 +2796,9 @@ mg_bool parseMapping(mg_mapping* mapping, const char* string) {
             length = fields[i].len;
             if (strncmp(substr, fields[i].name, length) != 0 || substr[length] != ':')
                 continue;
-            substr += length + 1;
+            value = substr + length + 1;
 
-            if (fields[i].element == NULL) {
+            if (fields[i].target == MG_MAPPING_FIELD_PLATFORM) {
                 #if defined(_WIN32)
                     const char name[] = "Windows";
                 #elif defined(__APPLE__)
@@ -2806,16 +2810,30 @@ mg_bool parseMapping(mg_mapping* mapping, const char* string) {
                 #else
                     const char name[] = "";
                 #endif
-                if (strncmp(substr, name, sizeof(name)) != 0)
+                length = MG_STRCSPN(value, ",");
+                if (length != sizeof(name) - 1 || strncmp(value, name, length) != 0)
                     return MG_FALSE;
 
+                substr = value;
                 break;
             }
 
-            e = fields[i].element;
-            if (e >= mapping->axes && e <= &mapping->axes[6] && substr[0] == 'b') {
-                continue;
+            source = value;
+            if (source[0] == '+' || source[0] == '-') {
+                source++;
             }
+
+            if (fields[i].target == MG_MAPPING_FIELD_BUTTON) {
+                e = &mapping->buttons[fields[i].val];
+            } else if (fields[i].target == MG_MAPPING_FIELD_AXIS) {
+                e = &mapping->axes[fields[i].val];
+            } else if (source[0] == 'a') {
+                e = &mapping->axes[fields[i].axisVal];
+            } else {
+                e = &mapping->buttons[fields[i].val];
+            }
+
+            substr = value;
 
             switch (substr[0]) {
                 case '+':
@@ -2830,18 +2848,19 @@ mg_bool parseMapping(mg_mapping* mapping, const char* string) {
             }
 
             switch (substr[0]) {
-                case 'a':
-
+                case 'a': {
                     e->type = MG_JOYSTICK_AXIS;
                     e->axisScale = (signed char)(2 / (maximum - minimum));
                     e->axisOffset = (signed char)(-(maximum + minimum));
+                    e->index = (uint8_t) strtoul(&substr[1], (char**) &substr, 10);
 
                     if (substr[0] == '~') {
                         e->axisScale = -e->axisScale;
                         e->axisOffset = -e->axisOffset;
+                        substr++;
                     }
-                    e->index = (uint8_t) strtoul(&substr[1], (char**) &substr, 10);
                     break;
+                }
                 case 'b':
                     e->type = MG_JOYSTICK_BUTTON;
                     e->index = (uint8_t) strtoul(&substr[1], (char**) &substr, 10);
@@ -2875,7 +2894,7 @@ mg_bool parseMapping(mg_mapping* mapping, const char* string) {
         mapping->rButtons[i] = MG_BUTTON_UNKNOWN;
         for (y = 0; y < (sizeof(mapping->buttons) / sizeof(mapping->buttons[0])); y++) {
             mg_element e = mapping->buttons[y];
-            if (e.index == i) {
+            if (e.type != 0 && e.index == i) {
                 mapping->rButtons[i] = (mg_button)y;
                 break;
             }
@@ -2885,9 +2904,9 @@ mg_bool parseMapping(mg_mapping* mapping, const char* string) {
     for (i = 0; i < MG_AXIS_COUNT; i++) {
         mg_size_t y;
         mapping->rAxes[i] = MG_AXIS_UNKNOWN;
-        for (y = 0; y < 6; y++) {
+        for (y = 0; y < (sizeof(mapping->axes) / sizeof(mapping->axes[0])); y++) {
             mg_element e = mapping->axes[y];
-            if (e.index == i) {
+            if (e.type != 0 && e.index == i) {
                 mapping->rAxes[i] = (mg_axis)y;
                 break;
             }
