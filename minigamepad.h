@@ -2246,6 +2246,8 @@ void mg_osx_device_added_callback(void* context, IOReturn result, void *sender, 
         return;
     }
 
+    gamepad->src.device = (void*)device;
+
     IOHIDDeviceRegisterInputValueCallback(device, mg_osx_input_value_changed_callback, gamepad);
 
     deviceName = (CFStringRef)IOHIDDeviceGetProperty(device, CFSTR(kIOHIDProductKey));
