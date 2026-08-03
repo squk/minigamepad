@@ -40,6 +40,12 @@ int main(void) {
 	size_t frames = 0;
 
 	while (RGFW_window_shouldClose(win) == RGFW_FALSE) {
+        #ifdef RGFW_MACOS
+        /* RGFW polls Cocoa directly, so service the run loop that owns the
+           IOHIDManager callbacks here instead of inside minigamepad. */
+        CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.001, MG_TRUE);
+        #endif
+
         mg_gamepads_poll(&gamepads);
 		if (gamepad == NULL) {
 			gamepad = gamepads.list.head;
