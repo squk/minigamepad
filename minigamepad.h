@@ -581,6 +581,8 @@ struct mg_gamepad_src {
 	void* events;
     void* axisElements[64];
     u8 axisElementCount;
+    void* hatElements[16];
+    u8 hatElementCount;
 };
 
 #elif defined(MG_WASM)
@@ -2206,6 +2208,62 @@ static mg_bool mg_osx_is_axis_usage(u32 page, u32 usage) {
     }
 }
 
+static u8 mg_osx_hat_value_to_bits(CFIndex value, CFIndex logicalMin, CFIndex logicalMax) {
+    static const u8 eightWayBits[] = {1, 3, 2, 6, 4, 12, 8, 9};
+    static const u8 fourWayBits[] = {1, 2, 4, 8};
+    const CFIndex direction = value - logicalMin;
+
+    if (direction < 0) return 0;
+    if (logicalMax - logicalMin == 3) {
+        if (direction >= 4) return 0;
+        return fourWayBits[(mg_size_t)direction];
+    }
+    if (direction >= 8) return 0;
+    return eightWayBits[(mg_size_t)direction];
+}
+
+static mg_button mg_osx_get_hat_button(mg_gamepad* gamepad, u8 hatIndex, u8 bit) {
+    mg_button btn = mg_get_gamepad_hat_button(gamepad, hatIndex, bit);
+
+    if (btn != MG_BUTTON_UNKNOWN || hatIndex != 0) return btn;
+    switch (bit) {
+        case 1: return MG_BUTTON_DPAD_UP;
+        case 2: return MG_BUTTON_DPAD_RIGHT;
+        case 4: return MG_BUTTON_DPAD_DOWN;
+        case 8: return MG_BUTTON_DPAD_LEFT;
+        default: return MG_BUTTON_UNKNOWN;
+    }
+}
+
+static void mg_osx_handle_hat_event(mg_gamepad* gamepad, IOHIDElementRef element, CFIndex value) {
+    static const u8 hatBits[] = {1, 2, 4, 8};
+    u8 hatIndex;
+    u8 direction;
+    mg_size_t i;
+
+    for (hatIndex = 0; hatIndex < gamepad->src.hatElementCount; hatIndex++) {
+        if ((IOHIDElementRef)gamepad->src.hatElements[hatIndex] == element) break;
+    }
+    if (hatIndex == gamepad->src.hatElementCount) return;
+
+    direction = mg_osx_hat_value_to_bits(
+        value,
+        IOHIDElementGetLogicalMin(element),
+        IOHIDElementGetLogicalMax(element)
+    );
+
+    for (i = 0; i < sizeof(hatBits) / sizeof(hatBits[0]); i++) {
+        const mg_button btn = mg_osx_get_hat_button(gamepad, hatIndex, hatBits[i]);
+        if (btn == MG_BUTTON_UNKNOWN) continue;
+        mg_handle_button_event(
+            (mg_events*)gamepad->src.events,
+            btn,
+            MG_BOOL(direction & hatBits[i]),
+            gamepad
+        );
+    }
+}
+
 void mg_osx_input_value_changed_callback(void *context, IOReturn result, void *sender, IOHIDValueRef value) {
 	mg_gamepad* gamepad = (mg_gamepad*)context;
 
@@ -2234,6 +2292,11 @@ void mg_osx_input_value_changed_callback(void *context, IOReturn result, void *s
             break;
 		}
 		case kHIDPage_GenericDesktop:
+            if (usage == kHIDUsage_GD_Hatswitch) {
+                mg_osx_handle_hat_event(gamepad, element, intValue);
+                break;
+            }
+			/* Fall through for axes. */
 		case kHIDPage_Simulation: {
 			CFIndex logicalMin = IOHIDElementGetLogicalMin(element);
 			CFIndex logicalMax = IOHIDElementGetLogicalMax(element);
@@ -2331,6 +2394,8 @@ void mg_osx_device_added_callback(void* context, IOReturn result, void *sender, 
 
     MG_MEMSET(gamepad->src.axisElements, 0, sizeof(gamepad->src.axisElements));
     gamepad->src.axisElementCount = 0;
+    MG_MEMSET(gamepad->src.hatElements, 0, sizeof(gamepad->src.hatElements));
+    gamepad->src.hatElementCount = 0;
 
     for (i = 0;  i < CFArrayGetCount(elements);  i++) {
         u32 elm_usage = 0, page = 0;
@@ -2363,6 +2428,26 @@ void mg_osx_device_added_callback(void* context, IOReturn result, void *sender, 
                 gamepad->buttons[btn].prev = 0;
                 gamepad->buttons[btn].current = 0;
                 gamepad->buttons[btn].supported = MG_TRUE;
+                break;
+            }
+            case kHIDPage_GenericDesktop: {
+                if (elm_usage == kHIDUsage_GD_Hatswitch &&
+                    gamepad->src.hatElementCount <
+                    sizeof(gamepad->src.hatElements) / sizeof(gamepad->src.hatElements[0]))
+                {
+                    static const u8 hatBits[] = {1, 2, 4, 8};
+                    const u8 hatIndex = gamepad->src.hatElementCount++;
+                    mg_size_t bitIndex;
+
+                    gamepad->src.hatElements[hatIndex] = (void*)native;
+                    for (bitIndex = 0; bitIndex < sizeof(hatBits) / sizeof(hatBits[0]); bitIndex++) {
+                        const mg_button btn = mg_osx_get_hat_button(gamepad, hatIndex, hatBits[bitIndex]);
+                        if (btn == MG_BUTTON_UNKNOWN) continue;
+                        gamepad->buttons[btn].prev = MG_FALSE;
+                        gamepad->buttons[btn].current = MG_FALSE;
+                        gamepad->buttons[btn].supported = MG_TRUE;
+                    }
+                }
                 break;
             }
         }
