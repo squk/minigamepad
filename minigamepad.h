@@ -667,6 +667,7 @@ MG_API mg_axis mg_get_gamepad_axis_platform(u32 axis);
 /* gamepads->src.mappings API */
 MG_API struct mg_mapping* mg_gamepad_find_valid_mapping(mg_gamepad* gamepad);
 MG_API mg_button mg_get_gamepad_button(mg_gamepad* gamepad, u8 button);
+MG_API mg_button mg_get_gamepad_hat_button(mg_gamepad* gamepad, u8 hat, u8 bit);
 MG_API mg_axis mg_get_gamepad_axis(mg_gamepad* gamepad, u8 axis);
 MG_API void mg_mappings_init(void);
 /* public/global API implementation */
@@ -2604,6 +2605,7 @@ typedef struct mg_mapping {
     mg_element axes[6];
 
     mg_button rButtons[256];
+    mg_button rHats[256];
     mg_axis rAxes[MG_AXIS_COUNT];
 } mg_mapping;
 
@@ -2625,6 +2627,14 @@ mg_button mg_get_gamepad_button(mg_gamepad* gamepad, u8 btn) {
     }
 
     return gamepad->mapping->rButtons[btn];
+}
+
+mg_button mg_get_gamepad_hat_button(mg_gamepad* gamepad, u8 hat, u8 bit) {
+    if (gamepad->mapping == NULL) {
+        return MG_BUTTON_UNKNOWN;
+    }
+
+    return gamepad->mapping->rHats[(u8)((hat << 4) | bit)];
 }
 
 mg_axis mg_get_gamepad_axis(mg_gamepad* gamepad, u8 axis) {
@@ -2892,11 +2902,13 @@ mg_bool parseMapping(mg_mapping* mapping, const char* string) {
     for (i = 0; i < (sizeof(mapping->rButtons) / sizeof(mapping->rButtons[0])); i++) {
         mg_size_t y;
         mapping->rButtons[i] = MG_BUTTON_UNKNOWN;
+        mapping->rHats[i] = MG_BUTTON_UNKNOWN;
         for (y = 0; y < (sizeof(mapping->buttons) / sizeof(mapping->buttons[0])); y++) {
             mg_element e = mapping->buttons[y];
-            if (e.type != 0 && e.index == i) {
+            if (e.type == MG_JOYSTICK_BUTTON && e.index == i) {
                 mapping->rButtons[i] = (mg_button)y;
-                break;
+            } else if (e.type == MG_JOYSTICK_HATBIT && e.index == i) {
+                mapping->rHats[i] = (mg_button)y;
             }
         }
     }
