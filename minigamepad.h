@@ -444,6 +444,15 @@ MG_API mg_bool mg_gamepads_check_event(mg_gamepads* gamepads, mg_event* event);
 MG_API void mg_gamepads_free(mg_gamepads* gamepads);
 
 /**!
+ * @brief set the gamepad's low- and high-frequency rumble motors
+ * @param gamepad object
+ * @param strong_magnitude low-frequency motor magnitude from zero to one
+ * @param weak_magnitude high-frequency motor magnitude from zero to one
+ * @return true when the native backend accepted the rumble request
+ */
+MG_API mg_bool mg_gamepad_rumble(mg_gamepad* gamepad, float strong_magnitude, float weak_magnitude);
+
+/**!
  * @brief returns if a button of a gamepad was pressed or not
  * @param gamepad object
  * @param button to check
@@ -561,6 +570,7 @@ struct mg_input_absinfo {
 
 struct mg_gamepad_src {
     int fd;
+    int rumble_effect_id;
     u8 keyMap[512];
     u8 absMap[64];
     struct mg_input_absinfo absInfo[64];
@@ -579,6 +589,8 @@ struct mg_gamepad_src {
 struct mg_gamepad_src {
 	void* device;
 	void* events;
+    void* rumble_device;
+    void* rumble_effect;
     void* axisElements[64];
     u8 axisElementCount;
     void* hatElements[16];
@@ -665,6 +677,7 @@ MG_API mg_bool mg_gamepads_poll_platform(mg_gamepads* gamepads, mg_events* event
 MG_API void mg_gamepads_free_platform(mg_gamepads* gamepads);
 MG_API mg_bool mg_gamepad_update_platform(mg_gamepad* gamepad, mg_events* events);
 MG_API void mg_gamepad_release_platform(mg_gamepad* gamepad);
+MG_API mg_bool mg_gamepad_rumble_platform(mg_gamepad* gamepad, float strong_magnitude, float weak_magnitude);
 MG_API mg_button mg_get_gamepad_button_platform(u32 button);
 MG_API mg_axis mg_get_gamepad_axis_platform(u32 axis);
 
@@ -678,6 +691,15 @@ MG_API void mg_mappings_init(void);
 
 mg_bool mg_gamepad_button_is_pressed(mg_gamepad* gamepad, mg_button button) {
     return gamepad->buttons[button].current;
+}
+
+mg_bool mg_gamepad_rumble(mg_gamepad* gamepad, float strong_magnitude, float weak_magnitude) {
+    if (gamepad == NULL || gamepad->connected == MG_FALSE) return MG_FALSE;
+    if (strong_magnitude < 0.0f) strong_magnitude = 0.0f;
+    if (strong_magnitude > 1.0f) strong_magnitude = 1.0f;
+    if (weak_magnitude < 0.0f) weak_magnitude = 0.0f;
+    if (weak_magnitude > 1.0f) weak_magnitude = 1.0f;
+    return mg_gamepad_rumble_platform(gamepad, strong_magnitude, weak_magnitude);
 }
 
 mg_bool mg_gamepad_button_is_released(mg_gamepad* gamepad, mg_button button) {
@@ -975,6 +997,7 @@ mg_gamepad* mg_linux_setup_gamepad(mg_gamepads* gamepads, const char* full_path)
     MG_STRNCPY(gamepad->src.full_path, full_path, 256);
 
     gamepad->src.fd = open(full_path, O_RDWR);
+    gamepad->src.rumble_effect_id = -1;
 
     fd = gamepad->src.fd;
     if (fd <= 0) {
@@ -1141,7 +1164,41 @@ mg_gamepad* mg_linux_setup_gamepad(mg_gamepads* gamepads, const char* full_path)
 }
 
 void mg_gamepad_release_platform(mg_gamepad* gamepad) {
+    mg_gamepad_rumble_platform(gamepad, 0.0f, 0.0f);
     close(gamepad->src.fd);
+}
+
+mg_bool mg_gamepad_rumble_platform(mg_gamepad* gamepad, float strong_magnitude, float weak_magnitude) {
+    struct input_event play;
+    struct ff_effect effect;
+    const mg_bool stopping = MG_BOOL(strong_magnitude <= 0.0f && weak_magnitude <= 0.0f);
+    if (gamepad == NULL || gamepad->src.fd <= 0) return MG_FALSE;
+
+    if (gamepad->src.rumble_effect_id >= 0) {
+        MG_MEMSET(&play, 0, sizeof(play));
+        play.type = EV_FF;
+        play.code = (u16)gamepad->src.rumble_effect_id;
+        play.value = 0;
+        write(gamepad->src.fd, &play, sizeof(play));
+        ioctl(gamepad->src.fd, EVIOCRMFF, gamepad->src.rumble_effect_id);
+        gamepad->src.rumble_effect_id = -1;
+    }
+    if (stopping) return MG_TRUE;
+
+    MG_MEMSET(&effect, 0, sizeof(effect));
+    effect.type = FF_RUMBLE;
+    effect.id = -1;
+    effect.u.rumble.strong_magnitude = (u16)(strong_magnitude * 65535.0f);
+    effect.u.rumble.weak_magnitude = (u16)(weak_magnitude * 65535.0f);
+    effect.replay.length = 0x7fff;
+    if (ioctl(gamepad->src.fd, EVIOCSFF, &effect) < 0) return MG_FALSE;
+    gamepad->src.rumble_effect_id = effect.id;
+
+    MG_MEMSET(&play, 0, sizeof(play));
+    play.type = EV_FF;
+    play.code = (u16)effect.id;
+    play.value = 1;
+    return MG_BOOL(write(gamepad->src.fd, &play, sizeof(play)) == sizeof(play));
 }
 
 
@@ -1487,6 +1544,7 @@ mg_gamepad* mg_xinput_list[XUSER_MAX_COUNT];
 typedef DWORD (* PFN_XInputGetState)(DWORD,XINPUT_STATE*);
 typedef DWORD (* PFN_XInputGetCapabilities)(DWORD,DWORD,XINPUT_CAPABILITIES*);
 typedef DWORD (* PFN_XInputGetKeystroke)(DWORD, DWORD, PXINPUT_KEYSTROKE);
+typedef DWORD (* PFN_XInputSetState)(DWORD, XINPUT_VIBRATION*);
 typedef HRESULT (WINAPI * PFN_DirectInput8Create)(HINSTANCE,DWORD,REFIID,LPVOID*,LPUNKNOWN);
 typedef HRESULT (WINAPI * PFN_GameInputCreate)(void* gameinput);
 
@@ -1499,6 +1557,7 @@ PFN_GameInputCreate GameInputCreateSrc = NULL;
 PFN_XInputGetState XInputGetStateSrc = NULL;
 PFN_XInputGetKeystroke XInputGetKeystrokeSrc = NULL;
 PFN_XInputGetCapabilities XInputGetCapabilitiesSrc = NULL;
+PFN_XInputSetState XInputSetStateSrc = NULL;
 PFN_DirectInput8Create DInput8CreateSrc = NULL;
 
 const GUID MG_IID_IDirectInput8W =
@@ -1820,6 +1879,7 @@ void mg_gamepads_init_platform(mg_gamepads* gamepads) {
                 XInputGetStateSrc = (PFN_XInputGetState)(mg_proc)GetProcAddress(mg_xinput_dll, "XInputGetState");
                 XInputGetKeystrokeSrc = (PFN_XInputGetKeystroke)(mg_proc)GetProcAddress(mg_xinput_dll, "XInputGetKeystroke");
                 XInputGetCapabilitiesSrc =  (PFN_XInputGetCapabilities)(mg_proc)GetProcAddress(mg_xinput_dll, "XInputGetCapabilities");
+                XInputSetStateSrc = (PFN_XInputSetState)(mg_proc)GetProcAddress(mg_xinput_dll, "XInputSetState");
             }
         }
 
@@ -2139,6 +2199,7 @@ mg_bool mg_gamepad_update_platform(mg_gamepad* gamepad, mg_events* events) {
 }
 
 void mg_gamepad_release_platform(mg_gamepad* gamepad) {
+    mg_gamepad_rumble_platform(gamepad, 0.0f, 0.0f);
     if (gamepad->src.device) {
         IDirectInputDevice8_Release((IDirectInputDevice8*)gamepad->src.device);
     }
@@ -2146,6 +2207,15 @@ void mg_gamepad_release_platform(mg_gamepad* gamepad) {
     if (gamepad->src.xinput_index) {
         mg_xinput_list[gamepad->src.xinput_index - 1] = NULL;
     }
+}
+
+mg_bool mg_gamepad_rumble_platform(mg_gamepad* gamepad, float strong_magnitude, float weak_magnitude) {
+    XINPUT_VIBRATION vibration;
+    if (gamepad == NULL || gamepad->src.xinput_index == 0 || XInputSetStateSrc == NULL) return MG_FALSE;
+    MG_MEMSET(&vibration, 0, sizeof(vibration));
+    vibration.wLeftMotorSpeed = (WORD)(strong_magnitude * 65535.0f);
+    vibration.wRightMotorSpeed = (WORD)(weak_magnitude * 65535.0f);
+    return MG_BOOL(XInputSetStateSrc(gamepad->src.xinput_index - 1, &vibration) == ERROR_SUCCESS);
 }
 
 mg_button mg_get_gamepad_button_platform(u32 button) {
@@ -2173,6 +2243,7 @@ mg_axis mg_get_gamepad_axis_platform(u32 axis) {
  */
 
 #if defined(MG_MACOS)
+#include <ForceFeedback/ForceFeedback.h>
 #include <IOKit/IOKitLib.h>
 #include <IOKit/hid/IOHIDManager.h>
 
@@ -2574,8 +2645,62 @@ mg_bool mg_gamepad_update_platform(mg_gamepad* gamepad, mg_events* events) {
 }
 
 
-void mg_gamepad_release_platform(mg_gamepad* gamepads) {
-    MG_UNUSED(gamepads);
+void mg_gamepad_release_platform(mg_gamepad* gamepad) {
+    if (gamepad == NULL) return;
+    mg_gamepad_rumble_platform(gamepad, 0.0f, 0.0f);
+    if (gamepad->src.rumble_device) {
+        FFReleaseDevice((FFDeviceObjectReference)gamepad->src.rumble_device);
+        gamepad->src.rumble_device = NULL;
+    }
+}
+
+mg_bool mg_gamepad_rumble_platform(mg_gamepad* gamepad, float strong_magnitude, float weak_magnitude) {
+    FFDeviceObjectReference device;
+    FFEffectObjectReference effect;
+    FFCONSTANTFORCE force;
+    FFEFFECT definition;
+    DWORD axis = FFJOFS_X;
+    LONG direction = 0;
+    float magnitude;
+
+    if (gamepad == NULL || gamepad->src.device == NULL) return MG_FALSE;
+    device = (FFDeviceObjectReference)gamepad->src.rumble_device;
+    effect = (FFEffectObjectReference)gamepad->src.rumble_effect;
+    if (effect) {
+        FFEffectStop(effect);
+        FFDeviceReleaseEffect(device, effect);
+        gamepad->src.rumble_effect = NULL;
+    }
+    magnitude = strong_magnitude > weak_magnitude ? strong_magnitude : weak_magnitude;
+    if (magnitude <= 0.0f) return MG_TRUE;
+
+    if (device == NULL) {
+        const io_service_t service = IOHIDDeviceGetService((IOHIDDeviceRef)gamepad->src.device);
+        if (!service || FFCreateDevice(service, &device) != FF_OK) return MG_FALSE;
+        gamepad->src.rumble_device = (void*)device;
+    }
+
+    MG_MEMSET(&force, 0, sizeof(force));
+    force.lMagnitude = (LONG)(magnitude * FF_FFNOMINALMAX);
+    MG_MEMSET(&definition, 0, sizeof(definition));
+    definition.dwSize = sizeof(definition);
+    definition.dwFlags = FFEFF_CARTESIAN | FFEFF_OBJECTOFFSETS;
+    definition.dwDuration = FF_INFINITE;
+    definition.dwGain = FF_FFNOMINALMAX;
+    definition.dwTriggerButton = FFEB_NOTRIGGER;
+    definition.cAxes = 1;
+    definition.rgdwAxes = &axis;
+    definition.rglDirection = &direction;
+    definition.cbTypeSpecificParams = sizeof(force);
+    definition.lpvTypeSpecificParams = &force;
+    if (FFDeviceCreateEffect(device, kFFEffectType_ConstantForce_ID, &definition, &effect) != FF_OK) return MG_FALSE;
+    gamepad->src.rumble_effect = (void*)effect;
+    if (FFEffectStart(effect, 1, 0) != FF_OK) {
+        FFDeviceReleaseEffect(device, effect);
+        gamepad->src.rumble_effect = NULL;
+        return MG_FALSE;
+    }
+    return MG_TRUE;
 }
 
 mg_button mg_get_gamepad_button_platform(u32 button) {
@@ -2736,6 +2861,11 @@ mg_bool mg_gamepad_update_platform(mg_gamepad* gamepad, mg_events* events) {
 
 void mg_gamepad_release_platform(mg_gamepad* gamepad) {
     mg_wasm_gamepads[gamepad->src.index] = NULL;
+}
+
+mg_bool mg_gamepad_rumble_platform(mg_gamepad* gamepad, float strong_magnitude, float weak_magnitude) {
+    MG_UNUSED(gamepad); MG_UNUSED(strong_magnitude); MG_UNUSED(weak_magnitude);
+    return MG_FALSE;
 }
 
 mg_button mg_get_gamepad_button_platform(u32 button) {
