@@ -113,7 +113,7 @@
 
 
 #if !defined(MG_SPRINTF)
-    #define MG_SPRINTF sprintf
+    #define MG_SPRINTF snprintf
 #endif
 
 #if !defined(MG_FPRINTF)
@@ -1054,14 +1054,14 @@ mg_gamepad* mg_linux_setup_gamepad(mg_gamepads* gamepads, const char* full_path)
         MG_STRNCPY(gamepad->name, "Unknown", sizeof(gamepad->name));
 
     if (id.vendor && id.product && id.version) {
-        MG_SPRINTF(gamepad->guid, "%02x%02x0000%02x%02x0000%02x%02x0000%02x%02x0000",
+        MG_SPRINTF(gamepad->guid, sizeof(gamepad->guid), "%02x%02x0000%02x%02x0000%02x%02x0000%02x%02x0000",
                  id.bustype & 0xff, id.bustype >> 8,
                  id.vendor & 0xff,  id.vendor >> 8,
                  id.product & 0xff, id.product >> 8,
                  id.version & 0xff, id.version >> 8);
     } else {
         const char* name = (const char*)gamepad->name;
-        MG_SPRINTF(gamepad->guid, "%02x%02x0000%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x00",
+        MG_SPRINTF(gamepad->guid, sizeof(gamepad->guid), "%02x%02x0000%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x00",
                  id.bustype & 0xff, id.bustype >> 8,
                  name[0], name[1], name[2], name[3],
                  name[4], name[5], name[6], name[7],
@@ -1528,13 +1528,29 @@ mg_axis mg_get_gamepad_axis_platform(u32 axis) {
 #if defined(MG_WINDOWS)
 
 #ifdef __cplusplus
+}
+#endif
+
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#include <xinput.h>
+
+#ifndef DIRECTINPUT_VERSION
+#define DIRECTINPUT_VERSION 0x0800
+#endif
+#include <dinput.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+#ifdef __cplusplus
 #define MG_REF_GUID(g) *(g)
 #else
 #define MG_REF_GUID(g) (g)
 #endif
-
-#include <xinput.h>
-#include <dinput.h>
 
 #ifndef DIDFT_OPTIONAL
 #define DIDFT_OPTIONAL          0x80000000
@@ -1746,13 +1762,13 @@ BOOL CALLBACK DirectInputEnumDevicesCallback(LPCDIDEVICEINSTANCE inst, LPVOID us
     }
 
     if (memcmp(&inst->guidProduct.Data4[2], "PIDVID", 6) == 0) {
-        MG_SPRINTF(gamepad->guid, "03000000%02x%02x0000%02x%02x000000000000",
+        MG_SPRINTF(gamepad->guid, sizeof(gamepad->guid), "03000000%02x%02x0000%02x%02x000000000000",
                 (uint8_t) inst->guidProduct.Data1,
                 (uint8_t) (inst->guidProduct.Data1 >> 8),
                 (uint8_t) (inst->guidProduct.Data1 >> 16),
                 (uint8_t) (inst->guidProduct.Data1 >> 24));
     } else {
-        MG_SPRINTF(gamepad->guid, "05000000%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x00",
+        MG_SPRINTF(gamepad->guid, sizeof(gamepad->guid), "05000000%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x00",
                 gamepad->name[0], gamepad->name[1], gamepad->name[2], gamepad->name[3],
                 gamepad->name[4], gamepad->name[5], gamepad->name[6], gamepad->name[7],
                 gamepad->name[8], gamepad->name[9], gamepad->name[10]);
@@ -1994,7 +2010,7 @@ void mg_xinput_fetch_gamepads(mg_gamepads* gamepads, mg_events* events) {
 		gamepad = mg_gamepad_find(gamepads);
 
 		gamepad->src.xinput_index = i + 1;
-		MG_SPRINTF(gamepad->guid, "78696e707574%02x000000000000000000", xic.SubType & 0xff);
+		MG_SPRINTF(gamepad->guid, sizeof(gamepad->guid), "78696e707574%02x000000000000000000", xic.SubType & 0xff);
 
 		for (button = 0; button < MG_BUTTON_MISC1; button++) {
 			if (button == MG_BUTTON_GUIDE) continue;
@@ -2357,7 +2373,9 @@ void mg_osx_input_value_changed_callback(void *context, IOReturn result, void *s
 
     switch (usagePage) {
 		case kHIDPage_Button: {
-			mg_button btn = mg_get_gamepad_button(gamepad, (u8)usage - 1);
+			mg_button btn = MG_BUTTON_UNKNOWN;
+			if (usage >= 1)
+				btn = mg_get_gamepad_button(gamepad, (u8)(usage - 1));
             if (btn == MG_BUTTON_UNKNOWN)
 			    btn = mg_get_gamepad_button_platform(usage);
             if (btn == MG_BUTTON_UNKNOWN)
@@ -2369,6 +2387,13 @@ void mg_osx_input_value_changed_callback(void *context, IOReturn result, void *s
 		case kHIDPage_GenericDesktop:
             if (usage == kHIDUsage_GD_Hatswitch) {
                 mg_osx_handle_hat_event(gamepad, element, intValue);
+                break;
+            }
+            if (usage >= kHIDUsage_GD_DPadUp && usage <= kHIDUsage_GD_DPadLeft) {
+                mg_button dpad_btn = mg_get_gamepad_button_platform(usage);
+                if (dpad_btn != MG_BUTTON_UNKNOWN) {
+                    mg_handle_button_event((mg_events*)gamepad->src.events, dpad_btn, MG_BOOL(intValue), gamepad);
+                }
                 break;
             }
 			/* Fall through for axes. */
@@ -2451,13 +2476,13 @@ void mg_osx_device_added_callback(void* context, IOReturn result, void *sender, 
         CFNumberGetValue((CFNumberRef)property, (CFNumberType)kCFNumberSInt32Type, (void*)&version);
 
     if (vendor && product) {
-        MG_SPRINTF(gamepad->guid, "03000000%02x%02x0000%02x%02x0000%02x%02x0000",
+        MG_SPRINTF(gamepad->guid, sizeof(gamepad->guid), "03000000%02x%02x0000%02x%02x0000%02x%02x0000",
                 (u8) vendor, (u8) (vendor >> 8),
                 (u8) product, (u8) (product >> 8),
                 (u8) version, (u8) (version >> 8));
     }
     else {
-        MG_SPRINTF(gamepad->guid, "05000000%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x00",
+        MG_SPRINTF(gamepad->guid, sizeof(gamepad->guid), "05000000%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x00",
                 gamepad->name[0],  gamepad->name[1],  gamepad->name[2],  gamepad->name[3],
                 gamepad->name[4], gamepad->name[5],  gamepad->name[6],  gamepad->name[7],
                 gamepad->name[8], gamepad->name[9],  gamepad->name[10]);
@@ -2494,7 +2519,9 @@ void mg_osx_device_added_callback(void* context, IOReturn result, void *sender, 
 
         switch (page) {
             case kHIDPage_Button: {
-                mg_button btn = mg_get_gamepad_button(gamepad, (u8)elm_usage - 1);
+                mg_button btn = MG_BUTTON_UNKNOWN;
+                if (elm_usage >= 1)
+                    btn = mg_get_gamepad_button(gamepad, (u8)(elm_usage - 1));
                 if (btn == MG_BUTTON_UNKNOWN)
                     btn = mg_get_gamepad_button_platform(elm_usage);
                 if (btn == MG_BUTTON_UNKNOWN)
@@ -2636,6 +2663,7 @@ void mg_gamepads_init_platform(mg_gamepads* gamepads) {
 
 mg_bool mg_gamepads_poll_platform(mg_gamepads* gamepads, mg_events* events) {
     MG_UNUSED(gamepads); MG_UNUSED(events);
+    CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0, false);
     return MG_FALSE;
 }
 
@@ -2716,10 +2744,10 @@ mg_button mg_get_gamepad_button_platform(u32 button) {
         case kHIDUsage_GD_SystemMainMenu:  return MG_BUTTON_GUIDE;
         case kHIDUsage_GD_Select:  return MG_BUTTON_BACK;
         case kHIDUsage_GD_Start: return MG_BUTTON_START;
-        case kHIDUsage_Button_1: return MG_BUTTON_SOUTH;
-        case kHIDUsage_Button_2: return MG_BUTTON_WEST;
-        case kHIDUsage_Button_3: return MG_BUTTON_EAST;
-        case kHIDUsage_Button_4: return MG_BUTTON_NORTH;
+        case kHIDUsage_Button_1: return MG_BUTTON_SOUTH;         /* Physical A */
+        case kHIDUsage_Button_2: return MG_BUTTON_EAST;          /* Physical B */
+        case kHIDUsage_Button_3: return MG_BUTTON_WEST;          /* Physical X */
+        case kHIDUsage_Button_4: return MG_BUTTON_NORTH;         /* Physical Y */
         case kHIDUsage_Button_5: return MG_BUTTON_LEFT_SHOULDER;
         case kHIDUsage_Button_6: return MG_BUTTON_RIGHT_SHOULDER;
         case kHIDUsage_Button_7: return MG_BUTTON_LEFT_TRIGGER;
@@ -2953,14 +2981,14 @@ void updateGamepadGUID(char* guid) {
     {
         char original[33];
         MG_STRNCPY(original, guid, sizeof(original) - 1);
-        MG_SPRINTF(guid,"03000000%.4s0000%.4s000000000000",
+        MG_SPRINTF(guid, sizeof(original), "03000000%.4s0000%.4s000000000000",
                 original, original + 16);
     }
 #elif defined(_WIN32)
     if (strncmp(&guid[20], "504944564944", 12) == 0) {
         char original[33];
         MG_STRNCPY(original, guid, sizeof(original) - 1);
-        MG_SPRINTF(guid, "03000000%.4s0000%.4s000000000000",
+        MG_SPRINTF(guid, sizeof(original), "03000000%.4s0000%.4s000000000000",
                 original, original + 4);
     }
 #else
