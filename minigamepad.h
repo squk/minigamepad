@@ -1328,7 +1328,11 @@ mg_bool mg_gamepad_update_platform(mg_gamepad* gamepad, mg_events* events) {
 
 		switch (ev.type) {
 			case EV_KEY: {
-				mg_button btn = mg_get_gamepad_button(gamepad, (u8)(gamepad->src.keyMap[ev.code - BTN_MISC]));
+				mg_button btn = MG_BUTTON_UNKNOWN;
+				if (ev.code >= BTN_MISC && (ev.code - BTN_MISC) < (int)sizeof(gamepad->src.keyMap)) {
+					btn = mg_get_gamepad_button(gamepad, (u8)(gamepad->src.keyMap[ev.code - BTN_MISC]));
+				}
+
 				if (btn == MG_BUTTON_UNKNOWN) {
 					btn = mg_get_gamepad_button_platform(ev.code);
 				}
@@ -2841,11 +2845,11 @@ mg_bool mg_gamepad_update_platform(mg_gamepad* gamepad, mg_events* events) {
 		mg_handle_button_event(events, btn, MG_BOOL(gamepadState.digitalButton[j]), gamepad);
     }
 
-    for (j = 0; j < gamepadState.numAxes; j += 2) {
+    for (j = 0; j < gamepadState.numAxes; j += 1) {
         mg_axis map[] = {
             MG_AXIS_LEFT_X, MG_AXIS_LEFT_Y,
             MG_AXIS_RIGHT_X, MG_AXIS_RIGHT_Y,
-            MG_AXIS_LEFT_TRIGGER, MG_AXIS_LEFT_TRIGGER
+            MG_AXIS_LEFT_TRIGGER, MG_AXIS_RIGHT_TRIGGER
         };
         mg_axis btn = MG_AXIS_UNKNOWN;
         if (j < (int)(sizeof(map) / sizeof(mg_axis)))
